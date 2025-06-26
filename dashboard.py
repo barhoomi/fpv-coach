@@ -1,50 +1,44 @@
-# %%
-import streamlit as st
-import pandas as pd
-import os # Import os module to check for file existence
-from streamlit_autorefresh import st_autorefresh # Import the autorefresh component
+import time  # to simulate a real time data, time loop
+import numpy as np  # np mean, np random
+import pandas as pd  # read csv, df manipulation
+import plotly.express as px  # interactive charts
+import streamlit as st  # 🎈 data web app development
+import plotly.express as px
+import plotly.graph_objects as go
+import os
 
-# %%
+refresh_rate = 1  # seconds
+refresh_history = 30  # seconds
+
+st.set_page_config(
+    page_title="Real-Time Data Drone Dashboard",
+    page_icon="🛩️",
+    layout="wide",
+)
+
 # Function to load data from CSV
-@st.cache_data(ttl=1) # Cache the data for 1 second, matching the refresh rate
-def load_data(file_path):
+@st.cache_data(ttl=refresh_history) # Cache the data
+def load_data(file_path='log.csv'):
     """Loads data from a CSV file."""
-    if not os.path.exists(file_path):
-        st.error(f"Error: The file '{file_path}' was not found. Please ensure it's in the same directory.")
-        return pd.DataFrame() # Return an empty DataFrame if file not found
+    return pd.read_csv(file_path)
 
-    try:
-        df = pd.read_csv(file_path)
-        return df
-    except Exception as e:
-        st.error(f"Error reading CSV file: {e}")
-        return pd.DataFrame() # Return empty DataFrame on error
 
-# Define the CSV file path
-csv_file_path = 'log.csv'
-
-# Automatically refresh the app every 1000 milliseconds (1 second)
-# This will cause the entire script to rerun, reloading the data
-st_autorefresh(interval=1000, key="data_refresher")
-
-# Load the data
-df = load_data(csv_file_path)
-
-# Ensure 'timestamp' is a numerical column for filtering
-if not df.empty and 'timestamp' in df.columns:
-    df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce')
-    df.dropna(subset=['timestamp'], inplace=True) # Remove rows where timestamp couldn't be converted
-
-    # Filter data to show only the last 30 seconds
-    if not df.empty:
-        max_timestamp = df['timestamp'].max()
-        time_threshold = max_timestamp - 30 # Calculate the timestamp 30 seconds ago
-        df_filtered = df[df['timestamp'] >= time_threshold]
+# Function to filter data for the last 30 seconds
+def filter_data(df, history_seconds=refresh_history):
+    """Filters the DataFrame to include only the last 'history_seconds' seconds of data."""
+    if 'timestamp' in df.columns:
+        # Ensure 'timestamp' is a datetime column
+        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+        # Filter the DataFrame for the last 'history_seconds' seconds
+        current_time = pd.Timestamp.now()
+        start_time = current_time - pd.Timedelta(seconds=history_seconds)
+        return df[(df['timestamp'] >= start_time) & (df['timestamp'] <= current_time)]
     else:
-        df_filtered = pd.DataFrame() # No data to filter
-else:
-    df_filtered = pd.DataFrame() # No timestamp column or empty dataframe
+        st.warning("'timestamp' column not found in data. Cannot filter by time.")
+        return pd.DataFrame()  # Return an empty DataFrame if no timestamp column
 
+df = load_data()
+df_filtered = filter_data(df, refresh_history)
 
 # Set 'timestamp' as the index for plotting on the filtered DataFrame
 if not df_filtered.empty and 'timestamp' in df_filtered.columns:
@@ -52,52 +46,118 @@ if not df_filtered.empty and 'timestamp' in df_filtered.columns:
 elif not df_filtered.empty:
     st.warning("'timestamp' column not found in filtered data. Plotting with default index.")
 
-# %%
-st.write("""
-# Drone Log Data Visualization (Last 30 Seconds)
-Hello *world!*
-""")
 
-st.write("---") # Add a separator
+buttons = st.container()
+# Create a container for the buttons
+with buttons:
+    st.write(f"# Drone Log Data Visualization (Last {refresh_history} Seconds)")
+    st.write("---") # Add a separator
 
-st.write("### Raw Data (Last 30 Seconds)")
-if not df_filtered.empty:
-    st.dataframe(df_filtered) # Display the filtered raw data in a table
-else:
-    st.info("No data in the last 30 seconds to display. Please ensure 'log.csv' exists, is correctly formatted, and has recent entries.")
-
+    button1, button2, button3 = st.columns(3)
+    with button1:
+        st.write("Start Logging Data")
+        clicked = st.button("Start", key="start_button")  # Use a unique key to avoid conflicts with the stop button
+        if clicked:
+            st.success("Logging started. Data will be displayed in real-time.")
+            os.system("python3 listener.py >> log.csv")  # Start tailing the log file in the background
+        else:
+            st.info("Click the button to start logging data. Ensure 'log.csv' is being updated in real-time.")
+    
+    with button2:
+        st.write("stop logging data")
+        stop_button = st.button("Stop", key="stop_button")  # Use a different key to avoid conflicts with the start button
+        if stop_button:
+            st.success("Logging stopped. Data will no longer be updated.")
+            os.system("pkill -f listener.py") # Stop the listener script if it's running
+        else:
+            st.info("Click the button to stop logging data. Ensure 'log.csv' is being updated in real-time.")
+            
+    with button3:
+        st.write("Clear Data")
+        clear_button = st.button("Clear", key="clear_button")
+        if clear_button:
+            st.success("Data cleared. The log file will be reset.")
+            if os.path.exists('log.csv'):
+                #remove everything except the header
+                header = pd.read_csv('log.csv', nrows=0)  # Read only the header
+                #clear the file
+                os.system("echo '' > log.csv")  # Clear the log file
+                #write the header back to the file
+                header.to_csv('log.csv', index=False)  # Write the header back to the file
+            
 
 st.write("---") # Add another separator
 
-st.write("### All Numerical Data Plots (Last 30 Seconds)")
+placeholder = st.empty()
 
-# Plot all numerical columns using st.line_chart from the filtered DataFrame
-if not df_filtered.empty:
-    # Select only numerical columns for plotting
-    numerical_df_filtered = df_filtered.select_dtypes(include=['number'])
-    if not numerical_df_filtered.empty:
-        st.line_chart(numerical_df_filtered)
-    else:
-        st.warning("No numerical data found in the filtered CSV for plotting.")
-else:
-    st.info("No data available in the last 30 seconds for plotting.")
+while True:
+    with placeholder.container():
+        
+        fig1, fig2 = st.columns(2)
+        with fig1:
+            st.write(f"### Raw Data (Last {refresh_history} Seconds)")
 
-st.write("---") # Add another separator
+            if not df_filtered.empty:
+                st.dataframe(df_filtered) # Display the filtered raw data in a table
+            else:
+                st.info(f"No data in the last {refresh_history} seconds to display. Please ensure 'log.csv' exists, is correctly formatted, and has recent entries.")
+                
+        with fig2:
+            # Plot all numerical columns using st.line_chart from the filtered DataFrame
+            st.write(f"### All Numerical Data Plots (Last {refresh_history} Seconds)")
+            if not df_filtered.empty:
+                # Select only numerical columns for plotting
+                numerical_df_filtered = df_filtered.select_dtypes(include=['number'])
+                if not numerical_df_filtered.empty:
+                    st.line_chart(numerical_df_filtered)
+                else:
+                    st.warning("No numerical data found in the filtered CSV for plotting.")
+            else:
+                st.info(f"No data available in the last {refresh_history} seconds for plotting.")
+            
+        st.write("---") # Add another separator
 
-st.write("### Individual Column Plots (Last 30 Seconds, Optional)")
-st.write("You can also plot individual columns if needed:")
+        st.write(f"### Individual Column Plots (Last {refresh_history} Seconds)")
+        
+        fig3, fig4 = st.columns(2)
+        # Example of plotting specific columns from the filtered DataFrame
+        with fig3:
+            if 'drone_position_x' in df_filtered.columns and 'drone_position_y' in df_filtered.columns and 'drone_position_z' in df_filtered.columns:
+                #st.line_chart(df_filtered[['drone_position_x', 'drone_position_y', 'drone_position_z']])
+                fig = go.Figure(data=[go.Scatter3d(
+                    x=df['drone_position_x'],
+                    y=df['drone_position_y'],
+                    z=df['drone_position_z'],
+                    mode='markers',
+                    marker=dict(
+                        size=1,
+                        color="#ffffff",                # set color to an array/list of desired values
+                        colorscale='Viridis',   # choose a colorscale
+                        opacity=0.8
+                    )
+                )])
+                fig.update_layout(
+                    title='Drone Position in 3D Space',
+                    scene=dict(
+                        xaxis_title='X Position',
+                        yaxis_title='Y Position',
+                        zaxis_title='Z Position'
+                    )
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.write("Above: Drone Position (X, Y, Z)")
+            else:
+                st.info("Drone position columns not found in filtered data for individual plot example.")
 
-# Example of plotting specific columns from the filtered DataFrame
-if not df_filtered.empty:
-    if 'drone_position_x' in df_filtered.columns and 'drone_position_y' in df_filtered.columns and 'drone_position_z' in df_filtered.columns:
-        st.line_chart(df_filtered[['drone_position_x', 'drone_position_y', 'drone_position_z']])
-        st.write("Above: Drone Position (X, Y, Z)")
-    else:
-        st.info("Drone position columns not found in filtered data for individual plot example.")
+        with fig4:
+            if 'battery_percentage' in df_filtered.columns:
+                st.line_chart(df_filtered['battery_percentage'])
+                st.write("Above: Battery Percentage")
+            else:
+                st.info("Battery percentage column not found in filtered data for individual plot example.")
 
-    if 'battery_percentage' in df_filtered.columns:
-        st.line_chart(df_filtered['battery_percentage'])
-        st.write("Above: Battery Percentage")
-    else:
-        st.info("Battery percentage column not found in filtered data for individual plot example.")
-
+        st.markdown("### Detailed Data View")
+        st.dataframe(df)
+        df = load_data()  # Reload the data to simulate real-time updates
+        df_filtered = filter_data(df, refresh_history)  # Filter the data for the last 30 seconds
+        time.sleep(refresh_rate)
